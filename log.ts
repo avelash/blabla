@@ -1,65 +1,82 @@
-import { datadogLogs } from "@datadog/browser-logs";
-// Pull from global window config (from env.js)
-const ENV = window.appConfig?.ENV;
-const SERVER = window.appConfig?.FRONTEND_NAME;
-//TODO: get token from secret
-const DATADOG_CLIENT_TOKEN = "pub7e79aef67986941493cb437955533ec5";
+import winston from "winston";
+import Transport from "datadog-winston";
+import { getDatadogApiKey, getEnv } from "./genericEnvVar";
+import os from "os";
+import { debug } from "console";
 
-// Only initialize if token exists
-function logToDatadog(): boolean {
-  const isDev = import.meta.env.DEV;
-  return !isDev 
-}
-if (datadogClientTokenExists() && logToDatadog()) {
-  datadogLogs.init({
-    clientToken: DATADOG_CLIENT_TOKEN, 
-    site: "datadoghq.com", // 'datadoghq.eu' if you're in Europe
-    forwardErrorsToLogs: true,
-    sessionSampleRate: 100,
-    env: ENV,
-  });
+const environment = getEnv();
+//const envsToLog = new Set(["test", "stag", "prod"]);
 
-  // Set global context after init
-  datadogLogs.setGlobalContext({
-    env: ENV,
-    server: SERVER,
-  });
-}
+const logger = winston.createLogger({
+  level: "info",
+  defaultMeta: { env: environment },
+  transports: [
+    new winston.transports.Console({
+      format: winston.format.combine(
+        winston.format.colorize(),
+        winston.format.simple()
+      ),
+    }),
 
-//to change
-function datadogClientTokenExists() {
-  return true;
+    new Transport({
+      apiKey: getDatadogApiKey(),
+      format: winston.format.json(),
+    }),
+  ],
+});
+
+function sendToDatadog(): boolean {
+  return process.env.DEBUG === "false";
 }
 
-class Log {
-  static info(...message: string[]) {
-    const logMessage = message.join(",");
-    if (!datadogClientTokenExists()) {
-      console.log(logMessage);
-      return;
-    }
-    datadogLogs.logger.info(logMessage, {});
-  }
+function logExtraParams() {
+  const server = process.env.serverName;
+  return { server };
+}
 
-  static warn(...message: string[]) {
-    const logMessage = message.join(",");
-    if (!datadogClientTokenExists()) {
-      console.warn(logMessage);
-      return;
-    }
-    datadogLogs.logger.warn(logMessage, {});
-  }
-
-  static error(e?: Error, ...message: string[]) {
-    const logMessage = message.join(",");
-    if (!datadogClientTokenExists()) {
-      console.error(logMessage, e);
-      return;
-    }
-    datadogLogs.logger.error(logMessage, {
-      error: e,
+function logInfo(...message: string[]) {
+  const logMessage = message.join(",");
+  if (sendToDatadog()) {
+    logger.info(logMessage, {
+      ...logExtraParams(),
+    });
+  } else {
+    console.log(logMessage, {
+      status: "info",
+      ...logExtraParams(),
     });
   }
 }
 
-export default Log;
+function logWarn(...message: string[]) {
+  const logMessage = message.join(",");
+  if (sendToDatadog()) {
+    logger.warn(logMessage, {
+      ...logExtraParams(),
+    });
+  } else {
+    console.log(logMessage, {
+      status: "warn",
+      ...logExtraParams(),
+    });
+  }
+}
+
+function logError(e: Error, ...message: string[]) {
+  const logMessage = message.join(",");
+  if (sendToDatadog()) {
+    logger.error(logMessage, {
+      error: e.message,
+      stack: e.stack,
+      ...logExtraParams(),
+    });
+  } else {
+    console.log(logMessage, {
+      status: "error",
+      error: e.message,
+      stack: e.stack,
+    });
+  }
+}
+
+export { logInfo, logWarn, logError };
